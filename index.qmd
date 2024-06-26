@@ -1,6 +1,6 @@
 ---
 title: "Registros de anfibios de Costa Rica"
-author: "| Irina Pérez Lescano | Ashley Salas Chavez |"
+author: "| Irina Pérez Lescano | Ashly Salas Chavez |"
 format: 
   dashboard:
     orientation: columns
