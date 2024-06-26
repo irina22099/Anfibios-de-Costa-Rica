@@ -1,0 +1,277 @@
+---
+title: "Registros de anfibios de Costa Rica"
+author: "| Irina Pérez Lescano | Ashley Salas Chavez |"
+format: 
+  dashboard:
+    orientation: columns
+    theme: journal
+---
+
+```{r}
+#| label: carga-paquetes
+
+library(tidyverse)
+library(sf)
+library(DT)
+library(plotly)
+library(leaflet)
+library(leaflet.extras)
+library(leafem)
+library(hrbrthemes)
+library(viridisLite)
+```
+
+```{r}
+#| label: carga-datos
+
+# Registros de anfibios
+registro_anfibios <-
+  st_read("registros-anfibios.csv",
+    options = c(
+     "X_POSSIBLE_NAMES=decimalLongitude", 
+      "Y_POSSIBLE_NAMES=decimalLatitude"),
+    quiet = TRUE
+    )
+st_crs(registro_anfibios ) <- 4326
+
+# Especies de anfibios
+especies_anfibios <- 
+  read.csv("especies-anfibios.csv") 
+
+# Areas de conservacion
+areas_conservacion <- st_read("areas-conservacion.geojson", quiet = TRUE) |>
+  st_transform(4326)
+```
+
+```{r}
+#| label: union-anfibios
+
+union_anfibios <-
+  registro_anfibios |>
+  left_join(
+    dplyr:: select(especies_anfibios,species,iucnRedListCategory),
+    by = "species"
+  )
+  
+```
+
+## colum {height=50%}
+
+```{r}
+#| label: tabla
+#| title: "Cantidad de registros de presencia por categoría dela Lista Roja de Especies Amenazadas de la Unión Internacional para la Conservación de la Naturaleza (UICN)"
+
+union_anfibios |>
+  group_by(iucnRedListCategory) |>
+  summarize(
+    n = n()
+  ) |>
+  arrange(desc(n)) |>
+  datatable(
+    colnames = c("Registros" = "n", "Categorias" = "iucnRedListCategory")
+  ) 
+```
+
+```{r}
+#| label: grafico-barras-UICN
+#| title: "Gráfico de barras de cantidad de especies en categorías CR, EN y VU de la Lista Roja de la UICN"
+
+grafico_ggplot2 <-
+union_anfibios |>
+  st_drop_geometry() |>
+  group_by(iucnRedListCategory) |>
+  filter(iucnRedListCategory == "CR" |
+           iucnRedListCategory == "EN" |
+           iucnRedListCategory == "VU") |>
+  summarize(n = n()) |>
+  ggplot(aes(x = iucnRedListCategory, y = n, fill = iucnRedListCategory)) +
+  geom_col(
+     aes(
+      text = paste0(
+        "Categoria UICN: ",iucnRedListCategory, "\n",
+        "Cantidad de especies: ", n
+      )
+    ),
+  ) +
+  scale_fill_manual(values = c("CR" = "orange", "EN" = "coral", "VU" = "pink"), name = "Leyenda") +
+  xlab("Categorias de la UICN") +
+  ylab("Cantidad de registros") +
+  labs(caption = "Fuente: (UICN)") +
+  theme_get() 
+
+
+
+ggplotly(grafico_ggplot2, tooltip = "text") |> config(locale = "es")
+```
+
+
+## Colum {.tabset}
+```{r}
+#| label: union-espacial-registros-areas
+#| warning: false
+#| message: false
+
+anfibios_union_areas <- 
+  st_join(
+    x = registro_anfibios,
+    y = dplyr::select(areas_conservacion, nombre_ac),
+    join = st_within
+  )
+```
+
+```{r}
+#| label: conteo-especie
+#| warning: false
+#| message: false
+
+riqueza_especies_anfibios_areas <-
+  anfibios_union_areas |>
+  st_drop_geometry() |>
+  group_by(nombre_ac) |>
+  summarize(riqueza_especies_anfibios = n_distinct(species, na.rm = TRUE))
+```
+
+```{r}
+#| label: union-no-espacial
+#| warning: false
+#| message: false
+
+areas_union_riqueza <-
+  left_join(
+    x = areas_conservacion,
+    y = dplyr::select(riqueza_especies_anfibios_areas, nombre_ac, riqueza_especies_anfibios),
+    by = "nombre_ac"
+  ) |>
+  replace_na(list(riqueza_especies_anfibios = 0))
+```
+
+```{r}
+#| label: mapa
+#| title: "Mapa de riqueza sobre las especies de anfibios en las áreas de conservación de Costa Rica"
+
+# Paleta de colores de riqueza de especies
+colores_riqueza_especies <-
+  colorNumeric(
+    palette = "Reds",
+    domain = areas_union_riqueza$riqueza_especies_anfibios,
+    na.color = "transparent"
+  )
+
+# Paleta de colores de especies
+colores_especies <- colorFactor(
+  palette = plasma(length(unique(registro_anfibios$species))), 
+  domain = registro_anfibios$species
+)
+
+# Mapa leaflet
+leaflet() |>
+  setView(
+    lng = -84,
+    lat = 10,
+    zoom = 7) |>
+  addTiles(group = "Mapa general (OpenStreetMap)") |>
+  addProviderTiles(
+    providers$Esri.WorldImagery, 
+    group = "Imágenes satelitales (ESRI World Imagery)"
+  ) |> 
+  addPolygons(
+    data = areas_union_riqueza,
+    fillColor = ~ colores_riqueza_especies(areas_union_riqueza$riqueza_especies_anfibios),
+    fillOpacity = 0.8,
+    color = "black",
+    stroke = TRUE,
+    weight = 1.0,
+    popup = paste(
+      paste("<strong>Area de Coservación:</strong>", areas_union_riqueza$nombre_ac),
+      paste("<strong>Riqueza de especies:</strong>", areas_union_riqueza$riqueza_especies_anfibios),
+      sep = '<br/>'
+    ),
+    group = "Riqueza de especies"
+  ) |>
+  addScaleBar(
+    position = "bottomleft", 
+    options = scaleBarOptions(imperial = FALSE)
+  ) |>    
+  addLegend(
+    position = "bottomleft",
+    pal = colores_riqueza_especies,
+    values = areas_union_riqueza$riqueza_especies_anfibios,
+    group = "Riqueza de especies",
+    title = "Riqueza de especies"
+  ) |>
+  addCircleMarkers(
+    data = registro_anfibios,
+    stroke = F,
+    radius = 4,
+    fillColor = ~colores_especies(registro_anfibios$species),
+    fillOpacity = 1.0,
+    popup = paste(
+      paste0("<strong>Especie: </strong>", registro_anfibios$species),
+      paste0("<strong>Area de conservación: </strong>", anfibios_union_areas$nombre_ac),
+      paste0("<strong>Fecha: </strong>", registro_anfibios$eventDate),
+      paste0("<strong>Fuente: </strong>", registro_anfibios$institutionCode),
+      paste0("<a href='", registro_anfibios$occurrenceID, "'>Más información</a>"),
+      sep = '<br/>'
+    ),    
+    group = "Registros de presencia"
+  ) |> 
+  addLayersControl(
+    baseGroups = c(
+      "Mapa general (OpenStreetMap)", 
+      "Imágenes satelitales (ESRI World Imagery)"
+    ),
+    overlayGroups = c(
+      "Riqueza de especies",
+      "Registros de presencia"
+    )
+  ) |>
+  addResetMapButton() |>
+  addSearchOSM() |>
+  addMouseCoordinates() |>
+  addFullscreenControl() |>
+  hideGroup("Registros de presencia") 
+```
+
+
+```{r}
+#| label: grafico-barras
+#| title: "Gráfico de barras de riqueza sobre las especies de anfibios en las áreas de conservación de Costa Rica"
+
+
+grafico_ggplot2 <-
+anfibios_union_areas |>
+  st_drop_geometry() |>
+  group_by(nombre_ac) |>
+  filter(nombre_ac == "Osa" |
+           nombre_ac == "Tempisque" |
+           nombre_ac == "Guanacaste" |
+           nombre_ac == "Tortuguero" | 
+           nombre_ac == "Central" |
+           nombre_ac == "La Amistad Pacifico" |
+           nombre_ac == "Pacifico Central" |
+           nombre_ac == "Huetar Norte" | 
+           nombre_ac == "Arenal Tempisque" |
+           nombre_ac == "La Amistad Caribe") |>
+  summarize(n = n()) |>
+   arrange(desc(n)) |>
+  ggplot(aes(x =reorder(nombre_ac, -n), y =n, fill = nombre_ac)) +
+  geom_col(
+     aes(
+      text = paste0(
+        "Area de conservación: ",nombre_ac, "\n",
+        "Registro de especies: ", n
+      )
+    ),
+  ) +
+  scale_fill_manual(values = c("Osa" = "coral", "Tempisque" = "coral", "Guanacaste" = "coral", "Tortuguero" = "coral", "Central" = "coral", "La Amistad Pacifico" = "coral","Pacifico Central" = "coral", "Huetar Norte" = "coral", "Arenal Tempisque" = "coral", "La Amistad Caribe" = "coral"), name = "Leyenda") +
+  xlab("Áreas de conservación") +
+  ylab("Cantidad de registros") +
+  theme_light()+
+  theme(axis.text.x = element_text(angle = 45))
+
+ggplotly(grafico_ggplot2, tooltip = "text") |> config(locale = "es")
+```
+
+
+
+
